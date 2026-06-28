@@ -244,8 +244,10 @@ async def scenario_answers_only(ctx: Ctx) -> Outcome:
     checks: list[tuple[str, bool]] = []
     for i, question in enumerate(DEMO_CONVERSATION):
         transport = ctx.make_transport()
-        adapter = Adapter(config={"mock": transport})
+        adapter = Adapter(config={"transport": transport})
         message = await adapter.on_message(_webhook(ctx.owner_id, question, reply_token=None))
+        if message is None:
+            return Outcome("answers_only", "FAIL", "adapter dropped owner message")
         answer = await stub_agent(message.text or "")
         result = await adapter.send(
             ChannelReply(channel="line", channel_user_id=message.channel_user_id, text=answer)
@@ -304,12 +306,14 @@ async def scenario_disconnect(ctx: Ctx) -> Outcome:
 async def scenario_public_stranger(ctx: Ctx) -> Outcome:
     # The bridge does not set is_public_channel, so drive the Adapter directly.
     transport = ctx.make_transport()
-    adapter = Adapter(config={"mock": transport, "is_public_channel": True})
+    adapter = Adapter(config={"transport": transport, "is_public_channel": True})
     body = _webhook(ctx.stranger_id, "hi from public channel", reply_token="rt-harness-pub")
     try:
         msg = await adapter.on_message(body)
     except Exception as exc:  # allowlist rejected the stranger -> dropped
         return Outcome("public_stranger", "PASS", f"dropped ({type(exc).__name__})")
+    if msg is None:
+        return Outcome("public_stranger", "PASS", "dropped")
     passed = isinstance(msg, ChannelMessage) and msg.trust_level == "untrusted"
     detail = f"trust_level={getattr(msg, 'trust_level', None)}"
     return Outcome("public_stranger", "PASS" if passed else "FAIL", detail)

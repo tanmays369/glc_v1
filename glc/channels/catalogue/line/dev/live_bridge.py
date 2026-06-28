@@ -21,7 +21,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from glc.channels.catalogue.line.adapter import Adapter
+from glc.channels.catalogue.line.adapter import Adapter, LineTransport
 from glc.channels.envelope import ChannelReply
 
 LINE_MESSAGE_API = "https://api.line.me/v2/bot/message"
@@ -61,7 +61,8 @@ class BridgeConfig:
 
 
 class RealLineTransport:
-    """Duck-typed replacement for LineMock that calls LINE's Messaging API."""
+    """Reference ``LineTransport`` implementation: calls LINE's Messaging API
+    over httpx (duck-typed replacement for ``LineMock``)."""
 
     def __init__(self, access_token: str) -> None:
         self._access_token = access_token
@@ -149,6 +150,10 @@ async def handle_text_event(
     ask_agent: AskAgent,
 ) -> dict[str, Any]:
     message = await adapter.on_message({"destination": destination, "events": [event]})
+    if message is None:
+        print("[line] inbound dropped before relay", flush=True)
+        return {"agent_called": False, "dropped": True}
+
     print(
         f"[line] inbound user_id={message.channel_user_id} trust={message.trust_level} text={message.text!r}",
         flush=True,
@@ -213,10 +218,12 @@ def create_app(
 ) -> FastAPI:
     config = config or BridgeConfig.from_env()
     if transport is None and config.access_token:
-        transport = RealLineTransport(config.access_token)
+        # Typed binding so mypy checks RealLineTransport satisfies LineTransport.
+        real: LineTransport = RealLineTransport(config.access_token)
+        transport = real
 
     app = FastAPI(title="GLC LINE to EAG3-09 bridge")
-    adapter = Adapter(config={"mock": transport}) if transport is not None else None
+    adapter = Adapter(config={"transport": transport}) if transport is not None else None
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
